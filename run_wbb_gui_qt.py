@@ -1,7 +1,8 @@
 import sys
 import json
+import vgamepad as vg # --- Import for XInput ---
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
     QDoubleSpinBox, QGridLayout
 )
@@ -10,8 +11,6 @@ from PyQt6.QtGui import (
     QFont, QColor, QPen, QBrush, QPainter
 )
 from WiiBalanceBoard_qt import WiiBalanceBoard # Import the Qt-enabled API
-
-# --- REMOVED ButtonIndicator class ---
 
 class CoMWidget(QGraphicsView):
     """
@@ -22,7 +21,7 @@ class CoMWidget(QGraphicsView):
         super().__init__()
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-        self.scene.setSceneRect(-100, -100, 200, 200) 
+        self.scene.setSceneRect(-100, -100, 200, 200)
         self.setFixedSize(202, 202)
         
         self.setBackgroundBrush(QColor(255, 255, 255))
@@ -62,8 +61,6 @@ class CoMWidget(QGraphicsView):
         right_label = self.scene.addText("R\n(+X)", font)
         right_label.setPos(98 - right_label.boundingRect().width(), -right_label.boundingRect().height() / 2)
         
-        # --- REMOVED Bounding Box Polygon ---
-        
         # --- Create pressure dots ---
         min_r = self._map_weight_to_radius(0)
         
@@ -79,7 +76,7 @@ class CoMWidget(QGraphicsView):
         self.br_dot = self.scene.addEllipse(0, 0, min_r * 2, min_r * 2, self.inactive_pressure_pen, self.inactive_pressure_brush)
         self.br_dot.setPos(90, 90); self.br_dot.setZValue(5)
 
-        # --- NEW: Create threshold indicators ---
+        # --- Create threshold indicators ---
         thresh_pen = QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DashLine)
         thresh_pen.setCosmetic(True)
         thresh_brush = QBrush(Qt.BrushStyle.NoBrush)
@@ -96,6 +93,24 @@ class CoMWidget(QGraphicsView):
         self.br_thresh = self.scene.addEllipse(0, 0, 0, 0, thresh_pen, thresh_brush)
         self.br_thresh.setPos(90, 90); self.br_thresh.setZValue(3)
 
+        # --- Add A, B, X, Y labels ---
+        label_font = QFont("Helvetica", 12, QFont.Weight.Bold)
+        
+        def create_button_label(text, pos_x, pos_y):
+            label = self.scene.addText(text, label_font)
+            label.setDefaultTextColor(QColor(255, 255, 255, 200)) # Semi-transparent white
+            # Center the label on the position
+            rect = label.boundingRect()
+            label.setPos(pos_x - rect.width() / 2, pos_y - rect.height() / 2)
+            label.setZValue(6) # On top of pressure dot, below CoM dot
+            return label
+
+        self.tl_label = create_button_label("A", -90, -90)
+        self.bl_label = create_button_label("B", -90, 90)
+        self.tr_label = create_button_label("X", 90, -90)
+        self.br_label = create_button_label("Y", 90, 90)
+
+        # --- Create main CoM dot ---
         self.com_dot = QGraphicsEllipseItem(-2, -2, 4, 4)
         self.com_dot.setBrush(QBrush(Qt.GlobalColor.red))
         self.com_dot.setPen(QPen(Qt.GlobalColor.red))
@@ -185,6 +200,16 @@ class BalanceBoardApp(QWidget):
         
         self.init_ui()
         self.init_board()
+        
+        # --- FIXED: Initialize virtual gamepad ---
+        try:
+            # Use the correct class name: VX360Gamepad
+            self.gamepad = vg.VX360Gamepad()
+            print("Virtual Xbox 360 gamepad initialized.")
+        except Exception as e:
+            print(f"Could not initialize virtual gamepad: {e}")
+            print("Please ensure ViGEmBus driver is installed.")
+            self.gamepad = None
 
     def init_ui(self):
         self.setWindowTitle("Wii Balance Board Monitor (PyQt6)")
@@ -228,14 +253,10 @@ class BalanceBoardApp(QWidget):
         
         quad_layout.addLayout(v_layout_left)
         quad_layout.addLayout(v_layout_right)
-
-        # --- REMOVED: Button Indicators Layout ---
-
-        # --- Center of Mass ---
-        # Removed header to save space
         
+        # --- Center of Mass ---
         self.com_widget = CoMWidget()
-        # --- NEW: Update threshold indicators on init ---
+        # Update threshold indicators on init
         self.com_widget.update_threshold_indicators(self.thresholds)
         
         com_widget_layout = QHBoxLayout()
@@ -303,7 +324,6 @@ class BalanceBoardApp(QWidget):
         main_layout.addLayout(com_widget_layout) # Add CoM graph
         main_layout.addSpacing(10)
         
-        # Removed "Button Thresholds:" label to save space
         main_layout.addWidget(threshold_frame) # Add threshold controls
         main_layout.addStretch()
         main_layout.addWidget(self.tare_button)
@@ -323,6 +343,8 @@ class BalanceBoardApp(QWidget):
         self.board.ready_to_tare.connect(lambda: self.tare_button.setEnabled(True))
         self.board.tare_complete.connect(self.on_tare_complete)
         
+        # --- REMOVED: board_button_pressed connection ---
+        
         self.processing_thread.started.connect(self.board.start_processing_loop)
         self.processing_thread.finished.connect(self.processing_thread.deleteLater)
         self.board.finished.connect(self.processing_thread.quit)
@@ -336,7 +358,7 @@ class BalanceBoardApp(QWidget):
     def on_threshold_changed(self, key, value):
         """Slot to update the internal threshold when a spinner is changed."""
         self.thresholds[key] = value
-        # --- NEW: Update the visual indicators ---
+        # Update the visual indicators
         self.com_widget.update_threshold_indicators(self.thresholds)
 
     def update_gui(self, data):
@@ -351,8 +373,7 @@ class BalanceBoardApp(QWidget):
         
         x, y = data['center_of_mass']
         
-        # --- NEW: Determine press states ---
-        # This is the "underlying value" dict you wanted
+        # Determine press states
         press_states = {
             'tl': quads['top_left'] > self.thresholds['top_left'],
             'tr': quads['top_right'] > self.thresholds['top_right'],
@@ -360,11 +381,39 @@ class BalanceBoardApp(QWidget):
             'br': quads['bottom_right'] > self.thresholds['bottom_right'],
         }
         
+        # Update virtual gamepad
+        if self.gamepad:
+            # A = Top-Left
+            if press_states['tl']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
+            
+            # B = Bottom-Left
+            if press_states['bl']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
+
+            # X = Top-Right
+            if press_states['tr']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
+            
+            # Y = Bottom-Right
+            if press_states['br']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
+
+            # --- FIXED: Send all updates to the virtual device ---
+            # This was the step missing from the previous attempt.
+            self.gamepad.update() 
+
         # Pass states to widget for visualization
         self.com_widget.update_dot(x, y, quads, press_states)
         
-        # --- REMOVED: Old button .set_active() calls ---
-
     def set_status(self, text):
         """Slot to update the status bar."""
         self.status_label.setText(text)
@@ -395,6 +444,14 @@ class BalanceBoardApp(QWidget):
             self.board.stop_processing()
             self.processing_thread.quit()
             self.processing_thread.wait(3000)
+        
+        # --- FIXED: Release virtual gamepad correctly ---
+        if self.gamepad:
+            print("Releasing virtual gamepad...")
+            self.gamepad.reset() # Reset all buttons/axes
+            self.gamepad.update() # Send the reset state
+            del self.gamepad # Delete the object
+            
         event.accept()
 
 def load_config():
