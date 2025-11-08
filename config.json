@@ -4,9 +4,9 @@
 "averaging_samples": 4,
 "dead_zone_kg": 0.2,
 "button_thresholds_kg": {
-"top_left": 30.0,
-"bottom_left": 30.0,
-"top_right": 30.0,
-"bottom_right": 30.0
+"top_left": 26.0,
+"bottom_left": 26.0,
+"top_right": 26.0,
+"bottom_right": 26.0
 }
 }

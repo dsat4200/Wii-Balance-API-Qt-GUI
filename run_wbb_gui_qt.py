@@ -4,11 +4,11 @@ import vgamepad as vg # --- Import for XInput ---
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
-    QDoubleSpinBox, QGridLayout
+    QDoubleSpinBox, QGridLayout, QGraphicsPathItem
 )
 from PyQt6.QtCore import Qt, QPointF, QThread, QRectF
 from PyQt6.QtGui import (
-    QFont, QColor, QPen, QBrush, QPainter
+    QFont, QColor, QPen, QBrush, QPainter, QPainterPath
 )
 from WiiBalanceBoard_qt import WiiBalanceBoard # Import the Qt-enabled API
 
@@ -33,6 +33,12 @@ class CoMWidget(QGraphicsView):
         self.inactive_pressure_pen = QPen(QColor(0, 0, 255, 180), 1)
         self.active_pressure_brush = QBrush(QColor(220, 0, 0, 120)) # Red
         self.active_pressure_pen = QPen(QColor(220, 0, 0, 180), 1) # Red
+        
+        # --- NEW: Pens/brushes for directional buttons ---
+        self.button_inactive_brush = QBrush(QColor(200, 200, 200, 150))
+        self.button_active_brush = QBrush(QColor(220, 0, 0, 200)) # Solid Red
+        self.button_pen = QPen(QColor(100, 100, 100, 200), 2)
+
 
         # --- Draw grid lines (axes) ---
         grid_pen = QPen(QColor(230, 230, 230), 1, Qt.PenStyle.SolidLine)
@@ -93,22 +99,13 @@ class CoMWidget(QGraphicsView):
         self.br_thresh = self.scene.addEllipse(0, 0, 0, 0, thresh_pen, thresh_brush)
         self.br_thresh.setPos(90, 90); self.br_thresh.setZValue(3)
 
-        # --- Add A, B, X, Y labels ---
-        label_font = QFont("Helvetica", 12, QFont.Weight.Bold)
+        # --- REMOVED: Old A, B, X, Y labels ---
         
-        def create_button_label(text, pos_x, pos_y):
-            label = self.scene.addText(text, label_font)
-            label.setDefaultTextColor(QColor(255, 255, 255, 200)) # Semi-transparent white
-            # Center the label on the position
-            rect = label.boundingRect()
-            label.setPos(pos_x - rect.width() / 2, pos_y - rect.height() / 2)
-            label.setZValue(6) # On top of pressure dot, below CoM dot
-            return label
-
-        self.tl_label = create_button_label("A", -90, -90)
-        self.bl_label = create_button_label("B", -90, 90)
-        self.tr_label = create_button_label("X", 90, -90)
-        self.br_label = create_button_label("Y", 90, 90)
+        # --- NEW: Add directional button visuals ---
+        self.button_north = self._create_button_shape('triangle', 0, -85)
+        self.button_west = self._create_button_shape('square', -85, 0)
+        self.button_south = self._create_button_shape('cross', 0, 85)
+        self.button_east = self._create_button_shape('circle', 85, 0)
 
         # --- Create main CoM dot ---
         self.com_dot = QGraphicsEllipseItem(-2, -2, 4, 4)
@@ -118,6 +115,41 @@ class CoMWidget(QGraphicsView):
         self.scene.addItem(self.com_dot)
         
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    def _create_button_shape(self, shape_type, x, y):
+        """Helper to create and add a button shape (QGraphicsPathItem)."""
+        path = QPainterPath()
+        s = 8 # Size scalar
+        
+        if shape_type == 'triangle':
+            path.moveTo(0, -s)
+            path.lineTo(s, s)
+            path.lineTo(-s, s)
+            path.closeSubpath()
+        elif shape_type == 'square':
+            path.addRect(-s*0.8, -s*0.8, s*1.6, s*1.6)
+        elif shape_type == 'cross':
+            s *= 1.2 # Make cross slightly larger
+            path.moveTo(-s*0.2, -s)
+            path.lineTo(s*0.2, -s)
+            path.lineTo(s*0.2, -s*0.2)
+            path.lineTo(s, -s*0.2)
+            path.lineTo(s, s*0.2)
+            path.lineTo(s*0.2, s*0.2)
+            path.lineTo(s*0.2, s)
+            path.lineTo(-s*0.2, s)
+            path.lineTo(-s*0.2, s*0.2)
+            path.lineTo(-s, s*0.2)
+            path.lineTo(-s, -s*0.2)
+            path.lineTo(-s*0.2, -s*0.2)
+            path.closeSubpath()
+        elif shape_type == 'circle':
+            path.addEllipse(-s, -s, s*2, s*2)
+            
+        item = self.scene.addPath(path, self.button_pen, self.button_inactive_brush)
+        item.setPos(x, y)
+        item.setZValue(6) # On top of pressure dots, below CoM
+        return item
 
     def _map_weight_to_radius(self, weight):
         """Helper to map a weight (kg) to a circle radius (px)."""
@@ -150,42 +182,50 @@ class CoMWidget(QGraphicsView):
         self.bl_thresh.setRect(-bl_r, -bl_r, bl_r * 2, bl_r * 2)
         self.br_thresh.setRect(-br_r, -br_r, br_r * 2, br_r * 2)
 
-    def update_dot(self, x, y, quadrants, press_states):
+    def update_dot(self, x, y, quadrants, sensor_press_states, direction_press_states):
         """
-        Updates the dot position and corner pressure circles.
-        Signature changed to accept press_states dict.
+        Updates the dot position, corner pressure circles, and directional buttons.
         """
+        # --- Update CoM dot ---
         canvas_x = x * 90 
         canvas_y = y * -90
         self.com_dot.setPos(canvas_x, canvas_y)
         
+        # --- Update pressure dot sizes ---
         tl_r = self._map_weight_to_radius(quadrants['top_left'])
         tr_r = self._map_weight_to_radius(quadrants['top_right'])
         bl_r = self._map_weight_to_radius(quadrants['bottom_left'])
         br_r = self._map_weight_to_radius(quadrants['bottom_right'])
         
-        # --- Update colors based on press state ---
-        tl_pressed = press_states['tl']
+        # --- Update pressure dot colors (based on sensor_press_states) ---
+        tl_pressed = sensor_press_states['tl']
         self.tl_dot.setBrush(self.active_pressure_brush if tl_pressed else self.inactive_pressure_brush)
         self.tl_dot.setPen(self.active_pressure_pen if tl_pressed else self.inactive_pressure_pen)
         
-        tr_pressed = press_states['tr']
+        tr_pressed = sensor_press_states['tr']
         self.tr_dot.setBrush(self.active_pressure_brush if tr_pressed else self.inactive_pressure_brush)
         self.tr_dot.setPen(self.active_pressure_pen if tr_pressed else self.inactive_pressure_pen)
         
-        bl_pressed = press_states['bl']
+        bl_pressed = sensor_press_states['bl']
         self.bl_dot.setBrush(self.active_pressure_brush if bl_pressed else self.inactive_pressure_brush)
         self.bl_dot.setPen(self.active_pressure_pen if bl_pressed else self.inactive_pressure_pen)
 
-        br_pressed = press_states['br']
+        br_pressed = sensor_press_states['br']
         self.br_dot.setBrush(self.active_pressure_brush if br_pressed else self.inactive_pressure_brush)
         self.br_dot.setPen(self.active_pressure_pen if br_pressed else self.inactive_pressure_pen)
 
-        # --- Update rects (size) ---
+        # --- Update pressure dot rects (size) ---
         self.tl_dot.setRect(-tl_r, -tl_r, tl_r * 2, tl_r * 2)
         self.tr_dot.setRect(-tr_r, -tr_r, tr_r * 2, tr_r * 2)
         self.bl_dot.setRect(-bl_r, -bl_r, bl_r * 2, bl_r * 2)
         self.br_dot.setRect(-br_r, -br_r, br_r * 2, br_r * 2)
+        
+        # --- NEW: Update directional button visuals ---
+        self.button_north.setBrush(self.button_active_brush if direction_press_states['north'] else self.button_inactive_brush)
+        self.button_west.setBrush(self.button_active_brush if direction_press_states['west'] else self.button_inactive_brush)
+        self.button_south.setBrush(self.button_active_brush if direction_press_states['south'] else self.button_inactive_brush)
+        self.button_east.setBrush(self.button_active_brush if direction_press_states['east'] else self.button_inactive_brush)
+
 
 class BalanceBoardApp(QWidget):
     def __init__(self, config):
@@ -201,9 +241,8 @@ class BalanceBoardApp(QWidget):
         self.init_ui()
         self.init_board()
         
-        # --- FIXED: Initialize virtual gamepad ---
+        # --- Initialize virtual gamepad ---
         try:
-            # Use the correct class name: VX360Gamepad
             self.gamepad = vg.VX360Gamepad()
             print("Virtual Xbox 360 gamepad initialized.")
         except Exception as e:
@@ -296,13 +335,14 @@ class BalanceBoardApp(QWidget):
             return lbl
 
         # Add to layout
-        threshold_layout.addWidget(create_threshold_label("A (Top-Left):"), 0, 0)
+        # --- MODIFIED: Simplified labels ---
+        threshold_layout.addWidget(create_threshold_label("Top-Left:"), 0, 0)
         threshold_layout.addWidget(self.spin_tl, 0, 1)
-        threshold_layout.addWidget(create_threshold_label("B (Bottom-Left):"), 1, 0)
+        threshold_layout.addWidget(create_threshold_label("Bottom-Left:"), 1, 0)
         threshold_layout.addWidget(self.spin_bl, 1, 1)
-        threshold_layout.addWidget(create_threshold_label("X (Top-Right):"), 0, 2)
+        threshold_layout.addWidget(create_threshold_label("Top-Right:"), 0, 2)
         threshold_layout.addWidget(self.spin_tr, 0, 3)
-        threshold_layout.addWidget(create_threshold_label("Y (Bottom-Right):"), 1, 2)
+        threshold_layout.addWidget(create_threshold_label("Bottom-Right:"), 1, 2)
         threshold_layout.addWidget(self.spin_br, 1, 3)
 
         # --- Tare Button ---
@@ -320,7 +360,7 @@ class BalanceBoardApp(QWidget):
         main_layout.addWidget(total_weight_header)
         main_layout.addWidget(self.total_weight_label)
         main_layout.addWidget(quad_frame)
-        main_layout.addSpacing(10) # Added a bit of space
+        main_layout.addSpacing(10) 
         main_layout.addLayout(com_widget_layout) # Add CoM graph
         main_layout.addSpacing(10)
         
@@ -342,8 +382,6 @@ class BalanceBoardApp(QWidget):
         
         self.board.ready_to_tare.connect(lambda: self.tare_button.setEnabled(True))
         self.board.tare_complete.connect(self.on_tare_complete)
-        
-        # --- REMOVED: board_button_pressed connection ---
         
         self.processing_thread.started.connect(self.board.start_processing_loop)
         self.processing_thread.finished.connect(self.processing_thread.deleteLater)
@@ -373,46 +411,57 @@ class BalanceBoardApp(QWidget):
         
         x, y = data['center_of_mass']
         
-        # Determine press states
-        press_states = {
+        # --- MODIFIED: Button logic ---
+        
+        # 1. Determine individual sensor press states
+        sensor_press_states = {
             'tl': quads['top_left'] > self.thresholds['top_left'],
             'tr': quads['top_right'] > self.thresholds['top_right'],
             'bl': quads['bottom_left'] > self.thresholds['bottom_left'],
             'br': quads['bottom_right'] > self.thresholds['bottom_right'],
         }
         
-        # Update virtual gamepad
+        # 2. Determine directional button press states based on combinations
+        direction_press_states = {
+            'north': sensor_press_states['tl'] and sensor_press_states['tr'], # Y (Triangle)
+            'west':  sensor_press_states['tl'] and sensor_press_states['bl'], # X (Square)
+            'south': sensor_press_states['bl'] and sensor_press_states['br'], # A (Cross)
+            'east':  sensor_press_states['tr'] and sensor_press_states['br'], # B (Circle)
+        }
+        
+        # 3. Update virtual gamepad
         if self.gamepad:
-            # A = Top-Left
-            if press_states['tl']:
+            # Map directions to Xbox buttons (Y, X, A, B)
+            
+            # North (Y / Triangle)
+            if direction_press_states['north']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
+            
+            # West (X / Square)
+            if direction_press_states['west']:
+                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
+            else:
+                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
+
+            # South (A / Cross)
+            if direction_press_states['south']:
                 self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
             else:
                 self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
             
-            # B = Bottom-Left
-            if press_states['bl']:
+            # East (B / Circle)
+            if direction_press_states['east']:
                 self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
             else:
                 self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
 
-            # X = Top-Right
-            if press_states['tr']:
-                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
-            else:
-                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
-            
-            # Y = Bottom-Right
-            if press_states['br']:
-                self.gamepad.press_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
-            else:
-                self.gamepad.release_button(button=vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
-
-            # --- FIXED: Send all updates to the virtual device ---
-            # This was the step missing from the previous attempt.
+            # Send all updates to the virtual device
             self.gamepad.update() 
 
-        # Pass states to widget for visualization
-        self.com_widget.update_dot(x, y, quads, press_states)
+        # 4. Pass *both* state dicts to widget for visualization
+        self.com_widget.update_dot(x, y, quads, sensor_press_states, direction_press_states)
         
     def set_status(self, text):
         """Slot to update the status bar."""
@@ -445,7 +494,6 @@ class BalanceBoardApp(QWidget):
             self.processing_thread.quit()
             self.processing_thread.wait(3000)
         
-        # --- FIXED: Release virtual gamepad correctly ---
         if self.gamepad:
             print("Releasing virtual gamepad...")
             self.gamepad.reset() # Reset all buttons/axes
