@@ -1,0 +1,5 @@
+{
+"tare_duration_sec": 4.0,
+"polling_rate_hz": 100,
+"averaging_samples":5
+}
