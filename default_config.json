@@ -10,7 +10,7 @@
         "bottom_right": 15.0
     },
     "button_mappings": {
-        "top_left": "XUSB_GAMEPAD_A",
+        "top_left": "XUSB_GAMEPAD_Y",
         "bottom_left": "XUSB_GAMEPAD_X",
         "top_right": "XUSB_GAMEPAD_B",
         "bottom_right": "XUSB_GAMEPAD_A"

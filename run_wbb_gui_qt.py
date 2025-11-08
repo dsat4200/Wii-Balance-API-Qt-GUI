@@ -548,6 +548,16 @@ class BalanceBoardApp(QWidget):
         self.tare_button.setEnabled(False)
         self.tare_button.setMinimumHeight(35)
         
+        # --- NEW: Save Config Button ---
+        self.save_button = QPushButton("Save Config")
+        self.save_button.setFont(QFont("Helvetica", 11, QFont.Weight.Bold))
+        self.save_button.setMinimumHeight(35)
+        
+        # --- Button Layout ---
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.tare_button)
+        button_layout.addWidget(self.save_button)
+        
         # --- Status Bar ---
         self.status_label = QLabel("Initializing...")
         self.status_label.setFont(QFont("Helvetica", 10))
@@ -565,7 +575,7 @@ class BalanceBoardApp(QWidget):
         main_layout.addWidget(mapping_frame) # Add mapping controls
         main_layout.addWidget(combo_mapping_frame) # NEW: Add combo mapping controls
         main_layout.addStretch()
-        main_layout.addWidget(self.tare_button)
+        main_layout.addLayout(button_layout) # Replaced tare_button with layout
         main_layout.addWidget(self.status_label)
 
     def init_board(self):
@@ -587,6 +597,8 @@ class BalanceBoardApp(QWidget):
         self.board.finished.connect(self.processing_thread.quit)
         
         self.tare_button.clicked.connect(self.on_tare_click)
+        # --- NEW: Connect save button ---
+        self.save_button.clicked.connect(self.save_config)
         
         self.processing_thread.start()
 
@@ -803,25 +815,28 @@ class BalanceBoardApp(QWidget):
         self.tare_button.setEnabled(True)
 
     def save_config(self):
-        """Saves current settings to config.json"""
-        print("Saving config.json...")
+        """Saves current settings to user_config.json"""
+        print("Saving user_config.json...")
         self.config["button_thresholds_kg"] = self.thresholds
         self.config["button_mappings"] = self.button_mappings
         # --- NEW: Save combo mappings ---
         self.config["combination_mappings"] = self.combination_mappings
         
         try:
-            with open("config.json", "w") as f:
+            with open("user_config.json", "w") as f:
                 json.dump(self.config, f, indent=4)
             print("Config saved.")
+            self.set_status("✅ Config saved to user_config.json")
         except Exception as e:
             print(f"Error saving config: {e}")
+            self.set_status(f"❌ Error saving config: {e}")
 
     def closeEvent(self, event):
         """Overrides the window close event to safely shut down the thread."""
         print("Closing application...")
         
-        self.save_config()
+        # --- REMOVED: save_config() ---
+        # User must save manually now
         
         if self.processing_thread.isRunning():
             self.board.stop_processing()
@@ -837,15 +852,40 @@ class BalanceBoardApp(QWidget):
         event.accept()
 
 def load_config():
-    """Loads the config.json file."""
+    """
+    Loads config, prioritizing user_config.json,
+    then default_config.json, then built-in defaults.
+    """
+    user_config_path = "user_config.json"
+    default_config_path = "default_config.json"
+    
+    config_to_load = None
+    
+    # 1. Try to load user_config.json
     try:
-        with open("config.json", "r") as f:
+        with open(user_config_path, "r") as f:
+            print(f"Loading user config from {user_config_path}")
             return json.load(f)
     except FileNotFoundError:
-        print("config.json not found, using defaults.")
-        # Create a more complete default config
-        return {
-            "tare_duration_sec": 3.0,
+        print(f"{user_config_path} not found.")
+    except Exception as e:
+        print(f"Error loading {user_config_path}: {e}")
+
+    # 2. Try to load default_config.json
+    try:
+        with open(default_config_path, "r") as f:
+            print(f"Loading default config from {default_config_path}")
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"{default_config_path} not found.")
+    except Exception as e:
+        print(f"Error loading {default_config_path}: {e}")
+
+    # 3. Use built-in defaults as a last resort
+    print("Using built-in defaults.")
+    # Create a more complete default config
+    return {
+        "tare_duration_sec": 3.0,
             "polling_rate_hz": 30,
             "averaging_samples": 5,
             "dead_zone_kg": 0.2,
@@ -861,17 +901,14 @@ def load_config():
             },
             # --- NEW: Default combo mappings ---
             "combination_mappings": {
-                "top_left_top_right": "None",
-                "bottom_left_bottom_right": "None",
+            "top_left_top_right": "None",
+            "bottom_left_bottom_right": "None",
                 "top_left_bottom_left": "None",
                 "top_right_bottom_right": "None",
                 "top_left_bottom_right": "None",
                 "top_right_bottom_left": "None"
-            }
         }
-    except Exception as e:
-        print(f"Error loading config: {e}")
-        return {}
+    }
 
 if __name__ == "__main__":
     config = load_config()
