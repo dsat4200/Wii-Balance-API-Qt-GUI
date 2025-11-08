@@ -238,19 +238,19 @@ class CoMWidget(QGraphicsView):
         br_r = self._map_weight_to_radius(quadrants['bottom_right'])
         
         # --- Update colors based on press state ---
-        tl_pressed = press_states['tl']
+        tl_pressed = press_states['top_left']
         self.tl_dot.setBrush(self.active_pressure_brush if tl_pressed else self.inactive_pressure_brush)
         self.tl_dot.setPen(self.active_pressure_pen if tl_pressed else self.inactive_pressure_pen)
         
-        tr_pressed = press_states['tr']
+        tr_pressed = press_states['top_right']
         self.tr_dot.setBrush(self.active_pressure_brush if tr_pressed else self.inactive_pressure_brush)
         self.tr_dot.setPen(self.active_pressure_pen if tr_pressed else self.inactive_pressure_pen)
         
-        bl_pressed = press_states['bl']
+        bl_pressed = press_states['bottom_left']
         self.bl_dot.setBrush(self.active_pressure_brush if bl_pressed else self.inactive_pressure_brush)
         self.bl_dot.setPen(self.active_pressure_pen if bl_pressed else self.inactive_pressure_pen)
 
-        br_pressed = press_states['br']
+        br_pressed = press_states['bottom_right']
         self.br_dot.setBrush(self.active_pressure_brush if br_pressed else self.inactive_pressure_brush)
         self.br_dot.setPen(self.active_pressure_pen if br_pressed else self.inactive_pressure_pen)
 
@@ -274,8 +274,26 @@ class BalanceBoardApp(QWidget):
         "Right Stick (R3)": "XUSB_GAMEPAD_RIGHT_THUMB",
         "Start": "XUSB_GAMEPAD_START",
         "Back": "XUSB_GAMEPAD_BACK",
-        "None": None # Option to disable a sensor
+        "None": "None" # Option to disable a sensor
     }
+    
+    # --- NEW: Map for combination inputs (joystick/d-pad) ---
+    VGAMEPAD_COMBO_MAP = {
+        "None": "None",
+        "Left Stick Up": "LS_UP",
+        "Left Stick Down": "LS_DOWN",
+        "Left Stick Left": "LS_LEFT",
+        "Left Stick Right": "LS_RIGHT",
+        "D-Pad Up": "DPAD_UP",
+        "D-Pad Down": "DPAD_DOWN",
+        "D-Pad Left": "DPAD_LEFT",
+        "D-Pad Right": "DPAD_RIGHT",
+    }
+    # --- NEW: All possible D-Pad buttons for release logic ---
+    ALL_DPAD_BUTTONS = {
+        "DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT"
+    }
+
     
     def __init__(self, config):
         super().__init__()
@@ -283,6 +301,8 @@ class BalanceBoardApp(QWidget):
         
         # --- Create reverse map for populating UI ---
         self.REVERSE_VGAMEPAD_MAP = {v: k for k, v in self.VGAMEPAD_BUTTON_MAP.items()}
+        # --- NEW: Reverse map for combos ---
+        self.REVERSE_VGAMEPAD_COMBO_MAP = {v: k for k, v in self.VGAMEPAD_COMBO_MAP.items()}
         
         # --- Load thresholds ---
         self.thresholds = self.config.get("button_thresholds_kg", {
@@ -298,6 +318,17 @@ class BalanceBoardApp(QWidget):
             "bottom_right": "XUSB_GAMEPAD_Y"
         }
         self.button_mappings = self.config.get("button_mappings", default_mappings)
+
+        # --- NEW: Load combination mappings ---
+        default_combo_mappings = {
+            "top_left_top_right": "None",
+            "bottom_left_bottom_right": "None",
+            "top_left_bottom_left": "None",
+            "top_right_bottom_right": "None",
+            "top_left_bottom_right": "None",
+            "top_right_bottom_left": "None"
+        }
+        self.combination_mappings = self.config.get("combination_mappings", default_combo_mappings)
         
         # --- Track visual button state ---
         self.button_view_mode = "xbox"
@@ -319,7 +350,7 @@ class BalanceBoardApp(QWidget):
     def init_ui(self):
         self.setWindowTitle("Wii Balance Board Monitor (PyQt6)")
         # Adjusted height for new controls
-        self.setGeometry(100, 100, 420, 780) 
+        self.setGeometry(100, 100, 420, 950) # Increased height for combo box
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(15, 15, 15, 15)
@@ -401,19 +432,19 @@ class BalanceBoardApp(QWidget):
         self.spin_br.valueChanged.connect(lambda v: self.on_threshold_changed("bottom_right", v))
 
         # Helper for creating labels
-        def create_threshold_label(text):
+        def create_mapping_label(text):
             lbl = QLabel(text)
             lbl.setFont(QFont("Helvetica", 10))
             return lbl
 
         # Add to layout
-        threshold_layout.addWidget(create_threshold_label("Top-Left:"), 1, 0)
+        threshold_layout.addWidget(create_mapping_label("Top-Left:"), 1, 0)
         threshold_layout.addWidget(self.spin_tl, 1, 1)
-        threshold_layout.addWidget(create_threshold_label("Bottom-Left:"), 2, 0)
+        threshold_layout.addWidget(create_mapping_label("Bottom-Left:"), 2, 0)
         threshold_layout.addWidget(self.spin_bl, 2, 1)
-        threshold_layout.addWidget(create_threshold_label("Top-Right:"), 1, 2)
+        threshold_layout.addWidget(create_mapping_label("Top-Right:"), 1, 2)
         threshold_layout.addWidget(self.spin_tr, 1, 3)
-        threshold_layout.addWidget(create_threshold_label("Bottom-Right:"), 2, 2)
+        threshold_layout.addWidget(create_mapping_label("Bottom-Right:"), 2, 2)
         threshold_layout.addWidget(self.spin_br, 2, 3)
 
         # --- Button Mapping Controls ---
@@ -422,7 +453,7 @@ class BalanceBoardApp(QWidget):
         mapping_layout = QGridLayout(mapping_frame)
         mapping_layout.setSpacing(8)
         mapping_layout.setContentsMargins(8, 8, 8, 8)
-        mapping_layout.addWidget(QLabel("Button Mappings:"), 0, 0, 1, 4)
+        mapping_layout.addWidget(QLabel("Button Mappings (Individual):"), 0, 0, 1, 4)
         
         # Create combo boxes
         self.combo_tl = QComboBox()
@@ -448,14 +479,68 @@ class BalanceBoardApp(QWidget):
         self.combo_br.currentTextChanged.connect(lambda text: self.on_mapping_changed("bottom_right", text))
 
         # Add to layout
-        mapping_layout.addWidget(create_threshold_label("Top-Left:"), 1, 0)
+        mapping_layout.addWidget(create_mapping_label("Top-Left:"), 1, 0)
         mapping_layout.addWidget(self.combo_tl, 1, 1)
-        mapping_layout.addWidget(create_threshold_label("Top-Right:"), 1, 2)
+        mapping_layout.addWidget(create_mapping_label("Top-Right:"), 1, 2)
         mapping_layout.addWidget(self.combo_tr, 1, 3)
-        mapping_layout.addWidget(create_threshold_label("Bottom-Left:"), 2, 0)
+        mapping_layout.addWidget(create_mapping_label("Bottom-Left:"), 2, 0)
         mapping_layout.addWidget(self.combo_bl, 2, 1)
-        mapping_layout.addWidget(create_threshold_label("Bottom-Right:"), 2, 2)
+        mapping_layout.addWidget(create_mapping_label("Bottom-Right:"), 2, 2)
         mapping_layout.addWidget(self.combo_br, 2, 3)
+        
+        # --- NEW: Combination Mapping Controls ---
+        combo_mapping_frame = QFrame()
+        combo_mapping_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        combo_mapping_layout = QGridLayout(combo_mapping_frame)
+        combo_mapping_layout.setSpacing(8)
+        combo_mapping_layout.setContentsMargins(8, 8, 8, 8)
+        combo_mapping_layout.addWidget(QLabel("Combination Mappings (Joystick/D-Pad):"), 0, 0, 1, 4)
+
+        # Create combo boxes
+        self.combo_tl_tr = QComboBox()
+        self.combo_bl_br = QComboBox()
+        self.combo_tl_bl = QComboBox()
+        self.combo_tr_br = QComboBox()
+        self.combo_tl_br = QComboBox()
+        self.combo_tr_bl = QComboBox()
+
+        combo_combos = [
+            self.combo_tl_tr, self.combo_bl_br, self.combo_tl_bl,
+            self.combo_tr_br, self.combo_tl_br, self.combo_tr_bl
+        ]
+        combo_keys = [
+            "top_left_top_right", "bottom_left_bottom_right", "top_left_bottom_left",
+            "top_right_bottom_right", "top_left_bottom_right", "top_right_bottom_left"
+        ]
+
+        for combo, key in zip(combo_combos, combo_keys):
+            combo.addItems(self.VGAMEPAD_COMBO_MAP.keys())
+            # Set initial value from config
+            mapped_combo_str = self.combination_mappings.get(key, "None")
+            display_text = self.REVERSE_VGAMEPAD_COMBO_MAP.get(mapped_combo_str, "None")
+            combo.setCurrentText(display_text)
+        
+        # Connect signals
+        self.combo_tl_tr.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("top_left_top_right", text))
+        self.combo_bl_br.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("bottom_left_bottom_right", text))
+        self.combo_tl_bl.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("top_left_bottom_left", text))
+        self.combo_tr_br.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("top_right_bottom_right", text))
+        self.combo_tl_br.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("top_left_bottom_right", text))
+        self.combo_tr_bl.currentTextChanged.connect(lambda text: self.on_combo_mapping_changed("top_right_bottom_left", text))
+
+        # Add to layout
+        combo_mapping_layout.addWidget(create_mapping_label("Top-Left + Top-Right:"), 1, 0)
+        combo_mapping_layout.addWidget(self.combo_tl_tr, 1, 1)
+        combo_mapping_layout.addWidget(create_mapping_label("Bottom-Left + Bottom-Right:"), 2, 0)
+        combo_mapping_layout.addWidget(self.combo_bl_br, 2, 1)
+        combo_mapping_layout.addWidget(create_mapping_label("Top-Left + Bottom-Left:"), 3, 0)
+        combo_mapping_layout.addWidget(self.combo_tl_bl, 3, 1)
+        combo_mapping_layout.addWidget(create_mapping_label("Top-Right + Bottom-Right:"), 4, 0)
+        combo_mapping_layout.addWidget(self.combo_tr_br, 4, 1)
+        combo_mapping_layout.addWidget(create_mapping_label("Top-Left + Bottom-Right:"), 5, 0)
+        combo_mapping_layout.addWidget(self.combo_tl_br, 5, 1)
+        combo_mapping_layout.addWidget(create_mapping_label("Top-Right + Bottom-Left:"), 6, 0)
+        combo_mapping_layout.addWidget(self.combo_tr_bl, 6, 1)
 
         # --- Tare Button ---
         self.tare_button = QPushButton("Tare (Zero)")
@@ -478,6 +563,7 @@ class BalanceBoardApp(QWidget):
         main_layout.addSpacing(10)
         main_layout.addWidget(threshold_frame) # Add threshold controls
         main_layout.addWidget(mapping_frame) # Add mapping controls
+        main_layout.addWidget(combo_mapping_frame) # NEW: Add combo mapping controls
         main_layout.addStretch()
         main_layout.addWidget(self.tare_button)
         main_layout.addWidget(self.status_label)
@@ -554,6 +640,30 @@ class BalanceBoardApp(QWidget):
         # NEW: Update the specific label on the CoM widget
         self.com_widget.update_label(key, text, self.button_view_mode)
 
+    def on_combo_mapping_changed(self, key, text):
+        """NEW: Slot to update the internal combination button mapping."""
+        vgamepad_string = self.VGAMEPAD_COMBO_MAP[text]
+        self.combination_mappings[key] = vgamepad_string
+        print(f"Combination Mapping changed: {key} -> {vgamepad_string}")
+
+    def _apply_combo_mapping(self, mapping_str, x, y, dpad_set):
+        """
+        Helper to apply a combo mapping (joystick or dpad)
+        Returns updated x, y, and dpad_set
+        """
+        if mapping_str == "LS_UP":
+            y = 32767
+        elif mapping_str == "LS_DOWN":
+            y = -32768
+        elif mapping_str == "LS_LEFT":
+            x = -32768
+        elif mapping_str == "LS_RIGHT":
+            x = 32767
+        elif mapping_str in self.ALL_DPAD_BUTTONS:
+            dpad_set.add(mapping_str)
+        
+        return x, y, dpad_set
+
     def update_gui(self, data):
         """Slot to update all GUI elements with new data."""
         quads = data['quadrants_kg']
@@ -566,35 +676,76 @@ class BalanceBoardApp(QWidget):
         
         x, y = data['center_of_mass']
         
-        # Determine press states
+        # --- NEW: Layered Button Logic ---
+        
+        # 1. Determine base press states
         press_states = {
-            'tl': quads['top_left'] > self.thresholds['top_left'],
-            'tr': quads['top_right'] > self.thresholds['top_right'],
-            'bl': quads['bottom_left'] > self.thresholds['bottom_left'],
-            'br': quads['bottom_right'] > self.thresholds['bottom_right'],
+            'top_left': quads['top_left'] > self.thresholds['top_left'],
+            'top_right': quads['top_right'] > self.thresholds['top_right'],
+            'bottom_left': quads['bottom_left'] > self.thresholds['bottom_left'],
+            'bottom_right': quads['bottom_right'] > self.thresholds['bottom_right'],
         }
         
-        # Update virtual gamepad
+        # 2. Initialize gamepad outputs
+        l_stick_x, l_stick_y = 0, 0
+        buttons_to_press_str = set()
+        dpad_buttons_to_press_str = set()
+        suppressed_buttons = set() # e.g., {'top_left', 'top_right'}
+        
+        tl = press_states['top_left']
+        tr = press_states['top_right']
+        bl = press_states['bottom_left']
+        br = press_states['bottom_right']
+
+        # 3. Check combinations (Priority 1)
+        # This dict simplifies checking all 6 pairs
+        combo_pairs = {
+            'top_left_top_right': (tl and tr),
+            'bottom_left_bottom_right': (bl and br),
+            'top_left_bottom_left': (tl and bl),
+            'top_right_bottom_right': (tr and br),
+            'top_left_bottom_right': (tl and br),
+            'top_right_bottom_left': (tr and bl)
+        }
+        
+        for combo_key, is_active in combo_pairs.items():
+            if is_active:
+                mapping_str = self.combination_mappings.get(combo_key)
+                if mapping_str and mapping_str != "None":
+                    # Apply the combo mapping (e.g., set l_stick_y)
+                    l_stick_x, l_stick_y, dpad_buttons_to_press_str = self._apply_combo_mapping(
+                        mapping_str, l_stick_x, l_stick_y, dpad_buttons_to_press_str
+                    )
+                    
+                    # Suppress the two buttons that make up this combo
+                    btn1 = combo_key[0:8] # 'top_left'
+                    btn2 = combo_key[9:100] # 'top_right'
+                    
+                    # Correctly split keys like 'top_left_bottom_left'
+                    parts = combo_key.split('_')
+                    btn1 = f"{parts[0]}_{parts[1]}" # 'top_left'
+                    btn2 = f"{parts[2]}_{parts[3]}" # 'bottom_left'
+                    
+                    suppressed_buttons.add(btn1)
+                    suppressed_buttons.add(btn2)
+
+        # 4. Check individual buttons (Priority 2)
+        for btn_key, is_active in press_states.items():
+            if is_active and btn_key not in suppressed_buttons:
+                mapping_str = self.button_mappings.get(btn_key)
+                if mapping_str and mapping_str != "None":
+                    buttons_to_press_str.add(mapping_str)
+
+        # 5. Update virtual gamepad
         if self.gamepad:
             
-            # Robust button mapping logic
+            # --- 5a. Individual Buttons (A, B, X, Y, etc.) ---
+            # Get all buttons managed by the *individual* mappings
             managed_buttons_str = set(self.button_mappings.values())
-            
-            buttons_to_press_str = set()
-            if press_states['tl']:
-                buttons_to_press_str.add(self.button_mappings.get('top_left'))
-            if press_states['tr']:
-                buttons_to_press_str.add(self.button_mappings.get('top_right'))
-            if press_states['bl']:
-                buttons_to_press_str.add(self.button_mappings.get('bottom_left'))
-            if press_states['br']:
-                buttons_to_press_str.add(self.button_mappings.get('bottom_right'))
+            if "None" in managed_buttons_str:
+                managed_buttons_str.remove("None")
 
-            if None in managed_buttons_str:
-                managed_buttons_str.remove(None)
-            if None in buttons_to_press_str:
-                buttons_to_press_str.remove(None)
-                
+            # Determine which managed buttons to release
             buttons_to_release_str = managed_buttons_str - buttons_to_press_str
 
             for button_str in buttons_to_press_str:
@@ -607,6 +758,22 @@ class BalanceBoardApp(QWidget):
                 if button_enum:
                     self.gamepad.release_button(button=button_enum)
 
+            # --- 5b. D-Pad ---
+            dpad_buttons_to_release_str = self.ALL_DPAD_BUTTONS - dpad_buttons_to_press_str
+
+            for dpad_str in dpad_buttons_to_press_str:
+                # e.g., vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP
+                button_enum = getattr(vg.XUSB_BUTTON, 'XUSB_GAMEPAD_' + dpad_str)
+                self.gamepad.press_button(button=button_enum)
+
+            for dpad_str in dpad_buttons_to_release_str:
+                button_enum = getattr(vg.XUSB_BUTTON, 'XUSB_GAMEPAD_' + dpad_str)
+                self.gamepad.release_button(button=button_enum)
+
+            # --- 5c. Left Stick ---
+            self.gamepad.left_joystick(x_value=l_stick_x, y_value=l_stick_y)
+            
+            # --- 5d. Send all updates ---
             self.gamepad.update() 
 
         # Pass states to widget for visualization
@@ -640,6 +807,8 @@ class BalanceBoardApp(QWidget):
         print("Saving config.json...")
         self.config["button_thresholds_kg"] = self.thresholds
         self.config["button_mappings"] = self.button_mappings
+        # --- NEW: Save combo mappings ---
+        self.config["combination_mappings"] = self.combination_mappings
         
         try:
             with open("config.json", "w") as f:
@@ -689,6 +858,15 @@ def load_config():
               "bottom_left": "XUSB_GAMEPAD_B",
               "top_right": "XUSB_GAMEPAD_X",
               "bottom_right": "XUSB_GAMEPAD_Y"
+            },
+            # --- NEW: Default combo mappings ---
+            "combination_mappings": {
+                "top_left_top_right": "None",
+                "bottom_left_bottom_right": "None",
+                "top_left_bottom_left": "None",
+                "top_right_bottom_right": "None",
+                "top_left_bottom_right": "None",
+                "top_right_bottom_left": "None"
             }
         }
     except Exception as e:
