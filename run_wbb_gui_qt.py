@@ -716,16 +716,16 @@ class BalanceBoardApp(QWidget):
 
     def on_tare_complete(self, success):
         if success:
-            self.set_status("✅ Ready! Please step ON the board.")
+            self.set_status("Ready! Please step ON the board.")
         else:
-            self.set_status("❌ Tare failed. No data. Try again.")
+            self.set_status("Tare failed. No data. Try again.")
         self.tare_button.setEnabled(True)
 
     def save_profile(self):
         """Saves the current settings to the selected profile file."""
         filename_basename = self.profile_combo.currentText()
         if not filename_basename:
-            self.set_status("❌ Cannot save: No profile file selected.")
+            self.set_status("Cant save: No profile file selected.")
             return
             
         full_path = os.path.join(PROFILES_DIR, filename_basename)
