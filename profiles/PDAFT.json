@@ -3,7 +3,7 @@
     "polling_rate_hz": 100,
     "averaging_samples": 3,
     "dead_zone_kg": 0.5,
-    "theme": "miku_light",
+    "theme": "shadow",
     "button_thresholds_kg": {
         "top_left": 5.5,
         "bottom_left": 5.5,
